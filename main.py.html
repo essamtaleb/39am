@@ -1,0 +1,245 @@
+import sqlite3
+from datetime import datetime
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
+from kivy.uix.button import Button
+from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.gridlayout import GridLayout
+
+# مكتبات معالجة النصوص العربية (تأكد من إضافتها في الـ requirements لاحقاً)
+import arabic_reshaper
+from bidi.algorithm import get_display
+
+# تحديد اسم ملف الخط العربي الذي رفعته بجانب الملف
+ARABIC_FONT = "Cairo-Regular.ttf" 
+
+def ar(text):
+    """دالة سحرية لإصلاح النصوص العربية المعكوسة والمقطعة"""
+    if not text:
+        return ""
+    reshaped_text = arabic_reshaper.reshape(text)
+    bidi_text = get_display(reshaped_text)
+    return bidi_text
+
+# ==================== إدارة قاعدة البيانات ====================
+def init_db():
+    conn = sqlite3.connect('essam_power.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS subscribers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            phone TEXT,
+            address TEXT,
+            sub_type TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS billing (
+            bill_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sub_id INTEGER,
+            prev_reading REAL,
+            curr_reading REAL,
+            total_cost REAL,
+            paid_amount REAL DEFAULT 0,
+            bill_date TEXT,
+            FOREIGN KEY(sub_id) REFERENCES subscribers(id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# ==================== الواجهات والتطبيق ====================
+
+class MainMenuScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        layout = BoxLayout(orientation='vertical', padding=20, spacing=15)
+        
+        layout.add_widget(Label(text=ar("نظام Essam Power لإدارة الكهرباء"), font_size=24, size_hint_y=0.2, font_name=ARABIC_FONT))
+        
+        btn_add_sub = Button(text=ar("إضافة مشترك جديد"), font_size=18, background_color=(0.2, 0.6, 1, 1), font_name=ARABIC_FONT)
+        btn_add_sub.bind(on_press=lambda x: setattr(self.manager, 'current', 'add_sub'))
+        
+        btn_billing = Button(text=ar("إدخال قراءة وفاتورة جديدة"), font_size=18, background_color=(0.2, 0.8, 0.4, 1), font_name=ARABIC_FONT)
+        btn_billing.bind(on_press=lambda x: setattr(self.manager, 'current', 'add_bill'))
+        
+        btn_reports = Button(text=ar("كشف الحساب والمديونيات"), font_size=18, background_color=(0.9, 0.4, 0.2, 1), font_name=ARABIC_FONT)
+        btn_reports.bind(on_press=lambda x: self.manager.get_screen('reports').load_data() or setattr(self.manager, 'current', 'reports'))
+        
+        layout.add_widget(btn_add_sub)
+        layout.add_widget(btn_billing)
+        layout.add_widget(btn_reports)
+        self.add_widget(layout)
+
+class AddSubscriberScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.layout = BoxLayout(orientation='vertical', padding=20, spacing=10)
+        
+        self.layout.add_widget(Label(text=ar("إضافة مشترك جديد"), font_size=20, font_name=ARABIC_FONT))
+        
+        self.name_input = TextInput(hint_text=ar("اسم المشترك الكلي"), multiline=False, font_name=ARABIC_FONT)
+        self.phone_input = TextInput(hint_text=ar("رقم الهاتف"), multiline=False, font_name=ARABIC_FONT)
+        self.address_input = TextInput(hint_text=ar("العنوان / الشارع"), multiline=False, font_name=ARABIC_FONT)
+        self.type_input = TextInput(hint_text=ar("نوع الاشتراك (منزلي / تجاري)"), multiline=False, font_name=ARABIC_FONT)
+        
+        self.layout.add_widget(self.name_input)
+        self.layout.add_widget(self.phone_input)
+        self.layout.add_widget(self.address_input)
+        self.layout.add_widget(self.type_input)
+        
+        btn_save = Button(text=ar("حفظ البيانات"), background_color=(0.2, 0.8, 0.4, 1), font_name=ARABIC_FONT)
+        btn_save.bind(on_press=self.save_subscriber)
+        
+        btn_back = Button(text=ar("رجوع للقائمة الرئيسية"), font_name=ARABIC_FONT)
+        btn_back.bind(on_press=lambda x: setattr(self.manager, 'current', 'main_menu'))
+        
+        self.layout.add_widget(btn_save)
+        self.layout.add_widget(btn_back)
+        self.add_widget(self.layout)
+
+    def save_subscriber(self, instance):
+        name = self.name_input.text
+        phone = self.phone_input.text
+        address = self.address_input.text
+        sub_type = self.type_input.text
+        
+        if name:
+            conn = sqlite3.connect('essam_power.db')
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO subscribers (name, phone, address, sub_type) VALUES (?, ?, ?, ?)', 
+                           (name, phone, address, sub_type))
+            conn.commit()
+            conn.close()
+            
+            self.name_input.text = ""
+            self.phone_input.text = ""
+            self.address_input.text = ""
+            self.type_input.text = ""
+            self.manager.current = 'main_menu'
+
+class AddBillScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        layout = BoxLayout(orientation='vertical', padding=20, spacing=10)
+        
+        layout.add_widget(Label(text=ar("تسجيل قراءة العداد واحتساب الفاتورة"), font_size=20, font_name=ARABIC_FONT))
+        
+        self.sub_id = TextInput(hint_text=ar("رقم المشترك (ID)"), multiline=False, font_name=ARABIC_FONT)
+        self.prev_read = TextInput(hint_text=ar("القراءة السابقة"), multiline=False, font_name=ARABIC_FONT)
+        self.curr_read = TextInput(hint_text=ar("القراءة الحالية"), multiline=False, font_name=ARABIC_FONT)
+        self.price_per_kw = TextInput(hint_text=ar("سعر الكيلو وات الحالي"), multiline=False, font_name=ARABIC_FONT)
+        self.paid = TextInput(hint_text=ar("المبلغ المدفوع (إن وجد)"), multiline=False, font_name=ARABIC_FONT)
+        
+        layout.add_widget(self.sub_id)
+        layout.add_widget(self.prev_read)
+        layout.add_widget(self.curr_read)
+        layout.add_widget(self.price_per_kw)
+        layout.add_widget(self.paid)
+        
+        btn_calc = Button(text=ar("إصدار الفاتورة وحفظها"), background_color=(0.2, 0.6, 1, 1), font_name=ARABIC_FONT)
+        btn_calc.bind(on_press=self.save_bill)
+        
+        btn_back = Button(text=ar("رجوع"), font_name=ARABIC_FONT)
+        btn_back.bind(on_press=lambda x: setattr(self.manager, 'current', 'main_menu'))
+        
+        layout.add_widget(btn_calc)
+        layout.add_widget(btn_back)
+        self.add_widget(layout)
+
+    def save_bill(self, instance):
+        try:
+            s_id = int(self.sub_id.text)
+            p_read = float(self.prev_read.text)
+            c_read = float(self.curr_read.text)
+            price = float(self.price_per_kw.text)
+            paid_val = float(self.paid.text) if self.paid.text else 0.0
+            
+            consumption = c_read - p_read
+            total_cost = consumption * price
+            date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            
+            conn = sqlite3.connect('essam_power.db')
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO billing (sub_id, prev_reading, curr_reading, total_cost, paid_amount, bill_date)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (s_id, p_read, c_read, total_cost, paid_val, date_str))
+            conn.commit()
+            conn.close()
+            
+            self.sub_id.text = ""
+            self.prev_read.text = ""
+            self.curr_read.text = ""
+            self.price_per_kw.text = ""
+            self.paid.text = ""
+            self.manager.current = 'main_menu'
+        except ValueError:
+            pass
+
+class ReportsScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.layout = BoxLayout(orientation='vertical', padding=20, spacing=10)
+        self.layout.add_widget(Label(text=ar("كشف المديونيات والحسابات الكلية"), font_size=20, size_hint_y=0.1, font_name=ARABIC_FONT))
+        
+        self.scroll = ScrollView()
+        self.grid = GridLayout(cols=4, size_hint_y=None, spacing=10)
+        self.grid.bind(minimum_height=self.grid.setter('height'))
+        
+        self.scroll.add_widget(self.grid)
+        self.layout.add_widget(self.scroll)
+        
+        btn_back = Button(text=ar("رجوع"), size_hint_y=0.15, font_name=ARABIC_FONT)
+        btn_back.bind(on_press=lambda x: setattr(self.manager, 'current', 'main_menu'))
+        self.layout.add_widget(btn_back)
+        
+        self.add_widget(self.layout)
+
+    def load_data(self):
+        self.grid.clear_widgets()
+        
+        self.grid.add_widget(Label(text=ar("المشترك"), bold=True, font_name=ARABIC_FONT))
+        self.grid.add_widget(Label(text=ar("المطلوب"), bold=True, font_name=ARABIC_FONT))
+        self.grid.add_widget(Label(text=ar("المدفوع"), bold=True, font_name=ARABIC_FONT))
+        self.grid.add_widget(Label(text=ar("المتبقي"), bold=True, font_name=ARABIC_FONT))
+        
+        conn = sqlite3.connect('essam_power.db')
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT s.name, SUM(b.total_cost), SUM(b.paid_amount)
+            FROM subscribers s
+            LEFT JOIN billing b ON s.id = b.sub_id
+            GROUP BY s.id
+        ''')
+        
+        rows = cursor.fetchall()
+        for row in rows:
+            name = row[0]
+            total = row[1] if row[1] else 0.0
+            paid = row[2] if row[2] else 0.0
+            remaining = total - paid
+            
+            self.grid.add_widget(Label(text=ar(str(name)), font_name=ARABIC_FONT))
+            self.grid.add_widget(Label(text=f"{total:,.2f}"))
+            self.grid.add_widget(Label(text=f"{paid:,.2f}"))
+            self.grid.add_widget(Label(text=f"{remaining:,.2f}"))
+            
+        conn.close()
+
+class EssamPowerApp(App):
+    def build(self):
+        init_db()
+        sm = ScreenManager()
+        sm.add_widget(MainMenuScreen(name='main_menu'))
+        sm.add_widget(AddSubscriberScreen(name='add_sub'))
+        sm.add_widget(AddBillScreen(name='add_bill'))
+        sm.add_widget(ReportsScreen(name='reports'))
+        return sm
+
+if __name__ == '__main__':
+    EssamPowerApp().run()
